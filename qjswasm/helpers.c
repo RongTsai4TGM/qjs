@@ -131,7 +131,7 @@ static const JSCFunctionListEntry navigator_proto_funcs[] = {
     JS_PROP_STRING_DEF("[Symbol.toStringTag]", "Navigator", JS_PROP_CONFIGURABLE),
 };
 
-void js_set_global_objs(JSContext *ctx)
+void js_set_global_objs(JSContext *ctx, bool host_modules)
 {
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyFunctionList(
@@ -157,6 +157,11 @@ void js_set_global_objs(JSContext *ctx)
     JS_FreeValue(ctx, navigator_proto);
 
     js_std_add_helpers(ctx, 0, 0);
+
+    /* Without the host modules (QJS_FLAG_DISABLE_MODULES) there is nothing to
+       expose, and the import below would fail: no std, os, bjson or timers. */
+    if (!host_modules)
+        return;
 
     /* make 'std' and 'os' visible to non module code */
     const char *str =

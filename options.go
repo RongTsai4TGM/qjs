@@ -47,7 +47,13 @@ type Option struct {
 	// keeps wazero's default (65536 pages, 4 GiB). Unlike MemoryLimit, which QuickJS enforces on its own accounting,
 	// this is a hard cap: when the guest cannot grow its memory, malloc fails and QuickJS throws "out of memory".
 	// The cap is part of the process-wide compiled module, so a New with a different value recompiles it.
-	MaxMemoryPages   uint32
+	MaxMemoryPages uint32
+	// DisableModules registers no host modules (qjs:std, qjs:os, qjs:bjson) and installs a module loader that refuses
+	// every import: import() of any name, however the source was built (eval, Function constructors), rejects with
+	// a TypeError "cannot import '<name>': module loading is disabled". The std, os and bjson globals and the timers
+	// (setTimeout, setInterval and their clear functions, which come from qjs:os) are not defined. For sandboxes;
+	// Load and module evaluation that imports anything fail too.
+	DisableModules   bool
 	QuickJSWasmBytes []byte
 	ProxyFunction    any
 	Stdout           io.Writer

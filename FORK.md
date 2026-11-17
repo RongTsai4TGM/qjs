@@ -14,6 +14,8 @@ ignored by the programs that import that library, so a renamed module is the onl
 | The process-wide compiled module is keyed on `CloseOnContextDone` too | It is a compile-time setting in wazero; upstream kept whatever the first `New` in the process asked for, so a later runtime that needed it could not be aborted |
 | `Option.MaxMemoryPages` | Hard cap on the wasm linear memory (wazero `WithMemoryLimitPages`). Upstream's `MemoryLimit` relies on QuickJS's own accounting, which misses large allocations in the wasm build, so a script could grow host memory up to the 4 GiB wasm32 limit. With the cap, the script gets a catchable `InternalError: out of memory` and the runtime stays usable. `TestMaxMemoryPagesBoundsStrings` |
 
+| `Option.DisableModules` (C: `QJS_FLAG_DISABLE_MODULES`, a fifth `New_QJS` argument) | For sandboxes. The host modules `qjs:std`, `qjs:os` and `qjs:bjson` are not registered (a registered module resolves by name before the loader is asked), the module loader refuses every name, and the `std`/`os`/`bjson` globals and timers are not set up. So `import()` fails inside the engine however its source was built (literal, `eval`, `Function` constructors, comments before the parenthesis), with `TypeError: cannot import '<name>': module loading is disabled`. Without the option nothing changes. `TestDisableModules`, `TestModulesEnabledByDefault` |
+
 ## Rebuilt `qjs.wasm`
 
 `qjs.wasm` is built from the same quickjs-ng commit as upstream (`qjswasm/quickjs` submodule, d01ca44) with two patches

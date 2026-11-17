@@ -327,10 +327,22 @@ func (r *Runtime) initializeRuntime() {
 		uint64(r.option.MaxStackSize),
 		uint64(r.option.MaxExecutionTime),
 		uint64(r.option.GCThreshold),
+		newQJSFlags(r.option),
 	)
 
 	r.context.handle = r.Call("QJS_GetContext", r.handle.raw)
 	r.context.runtime = r
+}
+
+// New_QJS flags; keep in step with qjswasm/qjs.h.
+const qjsFlagDisableModules = 1
+
+func newQJSFlags(o Option) uint64 {
+	var flags uint64
+	if o.DisableModules {
+		flags |= qjsFlagDisableModules
+	}
+	return flags
 }
 
 func (r *Runtime) call(name string, args ...uint64) uint64 {

@@ -59,7 +59,7 @@ void remove_trailing_slashes(char *path);
 int js__has_suffix(const char *str, const char *suffix);
 char *append_suffix(const char *base, const char *suffix);
 bool input_is_file(QJSEvalOptions opts);
-void js_set_global_objs(JSContext *ctx);
+void js_set_global_objs(JSContext *ctx, bool host_modules);
 char *detect_entry_point(char *module_name);
 JSValue js_std_await(JSContext *ctx, JSValue obj);
 void QJS_Free(QJSRuntime *qjs);
@@ -87,11 +87,16 @@ int init_qjs_proxy_value_class(JSContext *ctx);
 
 JSContext *New_QJSContext(JSRuntime *rt);
 // QJSRuntime *New_QJS(QJSRuntimeOptions);
+/* New_QJS flags. */
+/* No host modules (qjs:std, qjs:os, qjs:bjson) and a module loader that refuses every import. */
+#define QJS_FLAG_DISABLE_MODULES 1
+
 QJSRuntime *New_QJS(
     size_t memory_limit,
     size_t max_stack_size,
     size_t max_execution_time,
-    size_t gc_threshold);
+    size_t gc_threshold,
+    size_t flags);
 void QJS_UpdateStackTop(QJSRuntime *qjs);
 JSModuleDef *QJS_ModuleLoader(JSContext *ctx, const char *module_name, void *opaque);
 JSValue QJS_Load(JSContext *ctx, QJSEvalOptions opts);
