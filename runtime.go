@@ -199,6 +199,13 @@ func (r *Runtime) Close() {
 		r.module = nil
 	}
 
+	// Close the per-runtime wazero runtime: New creates one for every Runtime, with the WASI and "env" host modules
+	// instantiated in it. Closing only the guest module leaked them (about 23 KB of host memory per Runtime).
+	if r.wrt != nil {
+		_ = r.wrt.Close(r.context)
+		r.wrt = nil
+	}
+
 	// Clear references
 	if r.context != nil {
 		r.context = nil
