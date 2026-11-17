@@ -20,6 +20,7 @@ var (
 	compiledQJSModule   wazero.CompiledModule
 	cachedRuntimeConfig wazero.RuntimeConfig
 	cachedBytesHash     uint64
+	cachedMemoryPages   uint32
 	compilationMutex    sync.Mutex
 )
 
@@ -41,6 +42,7 @@ func createGlobalCompiledModule(
 	closeOnContextDone bool,
 	disableBuildCache bool,
 	cacheDir string,
+	maxMemoryPages uint32,
 	quickjsWasmBytes ...[]byte,
 ) (err error) {
 	// Protect global compilation state with mutex
@@ -58,7 +60,7 @@ func createGlobalCompiledModule(
 	currentHash := hashBytes(qjsBytes)
 
 	// Check if we need to compile or recompile
-	if compiledQJSModule == nil || cachedBytesHash != currentHash || disableBuildCache {
+	if compiledQJSModule == nil || cachedBytesHash != currentHash || cachedMemoryPages != maxMemoryPages || disableBuildCache {
 		var cache wazero.CompilationCache
 		if cacheDir == "" {
 			cache = wazero.NewCompilationCache()
@@ -70,6 +72,9 @@ func createGlobalCompiledModule(
 			NewRuntimeConfig().
 			WithCompilationCache(cache).
 			WithCloseOnContextDone(closeOnContextDone)
+		if maxMemoryPages > 0 {
+			cachedRuntimeConfig = cachedRuntimeConfig.WithMemoryLimitPages(maxMemoryPages)
+		}
 		wrt := wazero.NewRuntimeWithConfig(ctx, cachedRuntimeConfig)
 
 		if compiledQJSModule, err = wrt.CompileModule(ctx, qjsBytes); err != nil {
@@ -77,6 +82,7 @@ func createGlobalCompiledModule(
 		}
 
 		cachedBytesHash = currentHash
+		cachedMemoryPages = maxMemoryPages
 	}
 
 	return nil
@@ -104,6 +110,7 @@ func New(options ...Option) (runtime *Runtime, err error) {
 		option.CloseOnContextDone,
 		option.DisableBuildCache,
 		option.CacheDir,
+		option.MaxMemoryPages,
 		option.QuickJSWasmBytes,
 	); err != nil {
 		return nil, fmt.Errorf("failed to create global compiled module: %w", err)
