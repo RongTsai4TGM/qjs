@@ -21,6 +21,7 @@ var (
 	cachedRuntimeConfig wazero.RuntimeConfig
 	cachedBytesHash     uint64
 	cachedMemoryPages   uint32
+	cachedCloseOnDone   bool
 	compilationMutex    sync.Mutex
 )
 
@@ -60,7 +61,10 @@ func createGlobalCompiledModule(
 	currentHash := hashBytes(qjsBytes)
 
 	// Check if we need to compile or recompile
-	if compiledQJSModule == nil || cachedBytesHash != currentHash || cachedMemoryPages != maxMemoryPages || disableBuildCache {
+	if compiledQJSModule == nil || cachedBytesHash != currentHash || cachedMemoryPages != maxMemoryPages ||
+		cachedCloseOnDone != closeOnContextDone || disableBuildCache {
+		// CloseOnContextDone and the memory cap are compile-time settings in wazero, so a New that asks for other
+		// values recompiles the module instead of silently getting the first caller's.
 		var cache wazero.CompilationCache
 		if cacheDir == "" {
 			cache = wazero.NewCompilationCache()
@@ -83,6 +87,7 @@ func createGlobalCompiledModule(
 
 		cachedBytesHash = currentHash
 		cachedMemoryPages = maxMemoryPages
+		cachedCloseOnDone = closeOnContextDone
 	}
 
 	return nil
@@ -194,23 +199,28 @@ func (r *Runtime) Close() {
 		return
 	}
 
+	// The wasm side is released even when freeing the QuickJS runtime panics, which it does once wazero has closed the
+	// module because the context ended (CloseOnContextDone). The panic still reaches the caller.
+	defer func() {
+		r.handle = nil // also after a panic, so a second Close does not free it again
+
+		// Close WASM module
+		if r.module != nil {
+			_ = r.module.Close(context.Background())
+			r.module = nil
+		}
+
+		// Close the per-runtime wazero runtime: New creates one for every Runtime, with the WASI and "env" host modules
+		// instantiated in it. Closing only the guest module leaked them (about 23 KB of host memory per Runtime).
+		if r.wrt != nil {
+			_ = r.wrt.Close(context.Background())
+			r.wrt = nil
+		}
+	}()
+
 	// Free QJS runtime handle
 	if r.handle != nil {
 		r.FreeQJSRuntime()
-		r.handle = nil
-	}
-
-	// Close WASM module
-	if r.module != nil {
-		r.module.Close(r.context)
-		r.module = nil
-	}
-
-	// Close the per-runtime wazero runtime: New creates one for every Runtime, with the WASI and "env" host modules
-	// instantiated in it. Closing only the guest module leaked them (about 23 KB of host memory per Runtime).
-	if r.wrt != nil {
-		_ = r.wrt.Close(r.context)
-		r.wrt = nil
 	}
 
 	// Clear references

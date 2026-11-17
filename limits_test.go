@@ -1,9 +1,11 @@
 package qjs_test
 
 import (
+	"context"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/RongTsai4TGM/qjs"
 )
@@ -110,5 +112,46 @@ func TestMaxMemoryPagesBoundsStrings(t *testing.T) {
 	defer v2.Free()
 	if v2.Int32() != 2 {
 		t.Errorf("1 + 1 = %d after out of memory", v2.Int32())
+	}
+}
+
+// TestCloseAfterContextDoneReleasesEverything checks the abort path: when the context ends, wazero closes the guest
+// module (CloseOnContextDone), so freeing the QuickJS runtime in Close panics. Close must still close the wazero
+// runtime, or every aborted or timed-out runtime leaks.
+func TestCloseAfterContextDoneReleasesEverything(t *testing.T) {
+	abortAndClose := func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		rt, err := qjs.New(qjs.Option{Context: ctx, CloseOnContextDone: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			defer func() { _ = recover() }()
+			if v, err := rt.Context().Eval("loop.js", qjs.Code(`for (;;) {}`)); err == nil {
+				v.Free()
+			}
+		}()
+		time.Sleep(time.Millisecond)
+		cancel()
+		<-done
+		func() {
+			defer func() { _ = recover() }() // freeing the QuickJS runtime of a closed module may panic
+			rt.Close()
+		}()
+	}
+	for range 10 {
+		abortAndClose()
+	}
+	before := heapInUse()
+	const n = 200
+	for range n {
+		abortAndClose()
+	}
+	growth := int64(heapInUse()) - int64(before)
+	t.Logf("heap growth over %d aborted runtimes: %d bytes (%d per runtime)", n, growth, growth/n)
+	if growth > 1<<20 {
+		t.Errorf("heap grew %d bytes over %d aborted runtimes; Close leaks on the abort path", growth, n)
 	}
 }
