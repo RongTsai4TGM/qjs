@@ -14,11 +14,34 @@ ignored by the programs that import that library, so a renamed module is the onl
 | The process-wide compiled module is keyed on `CloseOnContextDone` too | It is a compile-time setting in wazero; upstream kept whatever the first `New` in the process asked for, so a later runtime that needed it could not be aborted |
 | `Option.MaxMemoryPages` | Hard cap on the wasm linear memory (wazero `WithMemoryLimitPages`). Upstream's `MemoryLimit` relies on QuickJS's own accounting, which misses large allocations in the wasm build, so a script could grow host memory up to the 4 GiB wasm32 limit. With the cap, the script gets a catchable `InternalError: out of memory` and the runtime stays usable. `TestMaxMemoryPagesBoundsStrings` |
 
-## Known, not yet fixed (need a `qjs.wasm` rebuild)
+## Rebuilt `qjs.wasm`
 
-- `MemoryLimit` (soft limit) does not count large allocations. `TestMemoryLimitCountsStrings` is skipped until then.
-- `MaxStackSize` is ignored. The wasm is linked with wasm-ld's default 64 KiB stack (`--stack-first`), so recursion
-  traps at roughly 229 frames ("out of bounds memory access") instead of throwing a catchable RangeError.
+`qjs.wasm` is built from the same quickjs-ng commit as upstream (`qjswasm/quickjs` submodule, d01ca44) with two patches
+in `qjswasm/patches/`, applied by `make patch` (and `make build`):
+
+| Change | Why |
+|---|---|
+| `0001-wasi-malloc-usable-size.patch` | `js__malloc_usable_size` returned 0 under WASI, so QuickJS counted only 8 bytes per allocation and the soft `MemoryLimit` missed everything but single oversized allocations (300 x 64 KiB strings fit under 8 MiB). wasi-libc's dlmalloc has `malloc_usable_size`. `TestMemoryLimitCountsStrings` |
+| `0002-wasi-stack-limit.patch` | `update_stack_limit` hard-coded "no limit" under WASI, so `MaxStackSize` was ignored and deep recursion trapped the VM instead of throwing. The limit now works, never goes below a 64 KiB guard at the bottom of the stack, and cannot wrap when `MaxStackSize` exceeds the linked stack. `TestDeepRecursionThrowsRangeError` |
+| `qjswasm.cmake`: link options as `target_link_options` | Upstream called `add_link_options` after `add_executable(qjswasm)`, so `--stack-first` and `--initial-memory` never reached the linker: the wasm had wasm-ld's 64 KiB stack placed after the data, where an overflow overwrites static data before anything traps. Now: `--stack-first`, a 1 MiB stack (QuickJS's default `JS_DEFAULT_STACK_SIZE`), 2 MiB initial memory |
+
+Result: unbounded recursion throws a catchable `RangeError: Maximum call stack size exceeded` at about 3,600 frames by
+default (upstream trapped at about 229); `MaxStackSize` below 1 MiB lowers that, above it is clamped. Deeply nested
+`JSON.parse`/`JSON.stringify`, `eval` of nested literals, nested regexp groups, getter/Proxy/`toString` recursion and
+GC of a 300,000-deep object graph all end with a catchable error or succeed, without trapping.
+
+### Building
+
+Needs [wasi-sdk](https://github.com/WebAssembly/wasi-sdk/releases) (built with wasi-sdk 34, clang 23), CMake and
+binaryen's `wasm-opt`:
+
+```sh
+git submodule update --init qjswasm/quickjs
+make build WASI_SDK_PATH=$HOME/opt/wasi-sdk   # default /opt/wasi-sdk; applies the patches, writes qjs.wasm
+git -C qjswasm/quickjs checkout -- .          # keep the submodule clean before committing
+```
+
+The built `qjs.wasm` is about 1.34 MB (upstream's was 1.04 MB, built with an older toolchain).
 
 ## Upstream test failure on macOS
 

@@ -2,6 +2,7 @@ package qjs_test
 
 import (
 	"context"
+	"encoding/json"
 	"runtime"
 	"strings"
 	"testing"
@@ -45,11 +46,9 @@ func TestCloseReleasesEverything(t *testing.T) {
 }
 
 // TestMemoryLimitCountsStrings checks whether JS_SetMemoryLimit accounts for large string allocations in the wasm build.
-//
-// Skipped until the wasm is rebuilt: QuickJS's own accounting misses large allocations in the wasm build, so the soft
-// MemoryLimit lets 300 x 64 KiB strings through. MaxMemoryPages is the hard cap in the meantime.
+// Upstream's build reported 0 from malloc_usable_size under WASI, so only 8 bytes per allocation were counted
+// (qjswasm/patches/0001-wasi-malloc-usable-size.patch).
 func TestMemoryLimitCountsStrings(t *testing.T) {
-	t.Skip("known: the wasm build's QuickJS accounting misses large allocations; needs a qjs.wasm rebuild (use MaxMemoryPages)")
 	rt, err := qjs.New(qjs.Option{MemoryLimit: 8 << 20})
 	if err != nil {
 		t.Fatal(err)
@@ -153,5 +152,65 @@ func TestCloseAfterContextDoneReleasesEverything(t *testing.T) {
 	t.Logf("heap growth over %d aborted runtimes: %d bytes (%d per runtime)", n, growth, growth/n)
 	if growth > 1<<20 {
 		t.Errorf("heap grew %d bytes over %d aborted runtimes; Close leaks on the abort path", growth, n)
+	}
+}
+
+// TestDeepRecursionThrowsRangeError checks the stack limit in the wasm build. Upstream disabled QuickJS's stack check
+// under WASI and its link options never reached the linker (64 KiB stack after the data), so recursion trapped the VM
+// at about 229 frames (qjswasm/patches/0002-wasi-stack-limit.patch, target_link_options in qjswasm.cmake).
+func TestDeepRecursionThrowsRangeError(t *testing.T) {
+	// maxDepth runs unbounded recursion and returns how deep it got and what it threw; the runtime must stay usable.
+	maxDepth := func(t *testing.T, maxStack int) (int, string) {
+		t.Helper()
+		rt, err := qjs.New(qjs.Option{MaxStackSize: maxStack})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rt.Close()
+		v, err := rt.Context().Eval("recursion.js", qjs.Code(`
+			let n = 0, err = "";
+			function f() { n++; f(); }
+			try { f(); } catch (e) { err = e.name + ": " + e.message; }
+			JSON.stringify({ n, err });
+		`))
+		if err != nil {
+			t.Fatalf("eval: %v", err)
+		}
+		var got struct {
+			N   int    `json:"n"`
+			Err string `json:"err"`
+		}
+		if err := json.Unmarshal([]byte(v.String()), &got); err != nil {
+			t.Fatal(err)
+		}
+		v.Free()
+		v2, err := rt.Context().Eval("after.js", qjs.Code(`1 + 1`))
+		if err != nil {
+			t.Fatalf("runtime unusable after stack overflow: %v", err)
+		}
+		defer v2.Free()
+		if v2.Int32() != 2 {
+			t.Errorf("1 + 1 = %d after stack overflow", v2.Int32())
+		}
+		return got.N, got.Err
+	}
+
+	def, defErr := maxDepth(t, 0)           // JS_DEFAULT_STACK_SIZE (1 MiB), clamped to the linked stack
+	small, smallErr := maxDepth(t, 256<<10) // below the linked stack: honored
+	large, largeErr := maxDepth(t, 4<<20)   // above the linked stack: clamped, must not wrap
+	t.Logf("max depth: default %d, 256 KiB %d, 4 MiB %d", def, small, large)
+	for name, e := range map[string]string{"default": defErr, "256 KiB": smallErr, "4 MiB": largeErr} {
+		if !strings.Contains(e, "RangeError") {
+			t.Errorf("%s: unbounded recursion did not throw a RangeError: %q", name, e)
+		}
+	}
+	if def < 2000 {
+		t.Errorf("default max depth %d; want well past upstream's ~229", def)
+	}
+	if small >= def/2 {
+		t.Errorf("MaxStackSize 256 KiB reached depth %d, default %d: the limit is not honored", small, def)
+	}
+	if large < def*9/10 || large > def*11/10 {
+		t.Errorf("MaxStackSize 4 MiB reached depth %d, default %d: want about the same (clamped to the linked stack)", large, def)
 	}
 }

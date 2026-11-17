@@ -180,5 +180,13 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)  # enables -flto for clang/wasm-ld
 add_compile_options(-O3 -DNDEBUG)
 add_link_options(-O3)
 
-add_link_options("LINKER:--stack-first")
-add_link_options("LINKER:--initial-memory=1310720") # 20 pages
+# Memory layout. These must be target options: upstream used add_link_options here, after add_executable(qjswasm), so
+# CMake never passed them to the linker and the wasm got wasm-ld's defaults (a 64 KiB stack placed after the data,
+# where an overflow silently overwrites static data before anything traps).
+# --stack-first puts the stack at [0, 1 MiB) so an overflow traps cleanly; 1 MiB is QuickJS's JS_DEFAULT_STACK_SIZE.
+# With qjswasm/patches/0002-wasi-stack-limit.patch, QuickJS throws a catchable RangeError before that.
+target_link_options(qjswasm PRIVATE
+    "LINKER:--stack-first"
+    "LINKER:-z,stack-size=1048576"
+    "LINKER:--initial-memory=2097152" # 32 pages: the 1 MiB stack, data and the start of the heap
+)

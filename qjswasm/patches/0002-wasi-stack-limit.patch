@@ -1,0 +1,37 @@
+diff --git a/quickjs.c b/quickjs.c
+index e0b38c7..77d123c 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -2580,16 +2580,29 @@ JSRuntime *JS_GetRuntime(JSContext *ctx)
+     return ctx->rt;
+ }
+ 
++#if defined(__wasi__)
++/* Bytes kept free at the bottom of the wasm shadow stack for C code that runs
++   below the last stack check. The stack is linked first (--stack-first), so it
++   spans [0, stack top) and overflowing it traps the VM. */
++#define JS_WASI_STACK_GUARD (64 * 1024)
++#endif
++
+ static void update_stack_limit(JSRuntime *rt)
+ {
+-#if defined(__wasi__)
+-    rt->stack_limit = 0; /* no limit */
+-#else
+     if (rt->stack_size == 0) {
+         rt->stack_limit = 0; /* no limit */
+     } else {
+         rt->stack_limit = rt->stack_top - rt->stack_size;
+     }
++#if defined(__wasi__)
++    /* The limit cannot go below the guard, and stack_top - stack_size must not
++       wrap when stack_size exceeds the linked stack. With no limit at all, deep
++       recursion would trap instead of throwing a RangeError. */
++    if (rt->stack_top <= JS_WASI_STACK_GUARD)
++        rt->stack_limit = 0;
++    else if (rt->stack_size == 0 || rt->stack_size >= rt->stack_top ||
++             rt->stack_limit < JS_WASI_STACK_GUARD)
++        rt->stack_limit = JS_WASI_STACK_GUARD;
+ #endif
+ }
+ 
