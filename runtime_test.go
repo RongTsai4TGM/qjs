@@ -229,7 +229,9 @@ func TestRuntime(t *testing.T) {
 
 	t.Run("FreeHandleError", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
-		rt := must(qjs.New(qjs.Option{Context: ctx}))
+		// Calls fail on a cancelled context only with CloseOnContextDone. Upstream got it from whichever test compiled
+		// the shared module first; the module cache is now keyed on it, so the test asks for it.
+		rt := must(qjs.New(qjs.Option{Context: ctx, CloseOnContextDone: true}))
 		ptr := rt.Malloc(1024)
 		cancel() // Cancel context to simulate error
 		assert.Panics(t, func() {
